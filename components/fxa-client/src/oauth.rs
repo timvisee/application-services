@@ -4,6 +4,7 @@
 
 use crate::{
     error::*,
+    http_client::OAuthTokenResponse,
     scoped_keys::{ScopedKey, ScopedKeysFlow},
     util, FirefoxAccount, RNG,
 };
@@ -37,17 +38,27 @@ impl FirefoxAccount {
             }
         }
         let resp = match self.state.refresh_token {
-            Some(ref refresh_token) => {
-                if refresh_token.scopes.contains(scope) {
-                    self.client.oauth_token_with_refresh_token(
-                        &self.state.config,
-                        &refresh_token.token,
-                        &[scope],
-                    )?
-                } else {
-                    return Err(ErrorKind::NoCachedToken(scope.to_string()).into());
-                }
-            }
+//            Some(ref refresh_token) => {
+//                if refresh_token.scopes.contains(scope) {
+//                    self.client.oauth_token_with_refresh_token(
+//                        &self.state.config,
+//                        &refresh_token.token,
+//                        &[scope],
+//                    )?
+//                } else {
+//                    return Err(ErrorKind::NoCachedToken(scope.to_string()).into());
+//                }
+//            }
+            // TODO: FOR THE SAKE OF THE PR AND AS A ONE-TIME DEAL FOR VLAD,
+            // I REMOVED THE SCOPE CHECK.
+            Some(ref refresh_token) => //match refresh_token.scopes.contains(scope) {
+                /*true =>*/ self.client.oauth_token_with_refresh_token(
+                    &self.state.config,
+                    &refresh_token.token,
+                    &[scope],
+                )?,
+                //false => return Err(ErrorKind::NoCachedToken(scope.to_string()).into()),
+            //},
             None => {
                 #[cfg(feature = "browserid")]
                 {
@@ -169,10 +180,18 @@ impl FirefoxAccount {
             &code,
             &oauth_flow.code_verifier,
         )?;
+        self.handle_oauth_response(resp, oauth_flow.scoped_keys_flow)
+    }
+
+    pub(crate) fn handle_oauth_response(
+        &mut self,
+        resp: OAuthTokenResponse,
+        scoped_keys_flow: Option<ScopedKeysFlow>,
+    ) -> Result<()> {
         // This assumes that if the server returns keys_jwe, the jwk argument is Some.
         match resp.keys_jwe {
             Some(ref jwe) => {
-                let scoped_keys_flow = match oauth_flow.scoped_keys_flow {
+                let scoped_keys_flow = match scoped_keys_flow {
                     Some(flow) => flow,
                     None => {
                         return Err(ErrorKind::UnrecoverableServerError(
@@ -190,7 +209,7 @@ impl FirefoxAccount {
                 }
             }
             None => {
-                if oauth_flow.scoped_keys_flow.is_some() {
+                if scoped_keys_flow.is_some() {
                     log::error!("Expected to get keys back alongside the token but the server didn't send them.");
                     return Err(ErrorKind::TokenWithoutKeys.into());
                 }

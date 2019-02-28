@@ -3,12 +3,20 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use crate::{config::Config, error::*};
+use browser_id::{derive_key_from_session_token, hawk_request::HawkRequestBuilder};
 use serde_derive::*;
 use serde_json::json;
 use std::collections::HashMap;
-use viaduct::{header_names, status_codes, Request, Response};
+use viaduct::{header_names, status_codes, Method, Request, Response};
 
-#[cfg(feature = "browserid")]
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+struct DuplicateToken {
+    uid: String,
+    sessionToken: String,
+    verified: bool,
+    authAt: u64,
+}
+
 pub(crate) mod browser_id;
 
 pub trait FxAClient {
@@ -22,6 +30,12 @@ pub trait FxAClient {
         &self,
         config: &Config,
         refresh_token: &str,
+        scopes: &[&str],
+    ) -> Result<OAuthTokenResponse>;
+    fn refresh_token_with_session_token(
+        &self,
+        config: &Config,
+        session_token: &[u8],
         scopes: &[&str],
     ) -> Result<OAuthTokenResponse>;
     fn destroy_oauth_token(&self, config: &Config, token: &str) -> Result<()>;
@@ -54,6 +68,12 @@ pub trait FxAClient {
         update: DeviceUpdateRequest<'_>,
     ) -> Result<UpdateDeviceResponse>;
     fn destroy_device(&self, config: &Config, refresh_token: &str, id: &str) -> Result<()>;
+    fn scoped_key_data(
+        &self,
+        config: &Config,
+        session_token: &[u8],
+        scope: &str,
+    ) -> Result<HashMap<String, ScopedKeyDataResponse>>;
 }
 
 pub struct Client;
@@ -111,6 +131,40 @@ impl FxAClient for Client {
             "scope": scopes.join(" ")
         });
         self.make_oauth_token_request(config, body)
+    }
+
+    fn refresh_token_with_session_token(
+        &self,
+        config: &Config,
+        session_token: &[u8],
+        scopes: &[&str],
+    ) -> Result<OAuthTokenResponse> {
+        let duplicate_url = config.auth_url_path("v1/session/duplicate")?;
+        let duplicate_key = derive_key_from_session_token(session_token)?;
+        let duplicate_body = json!({
+            "reason": "fenix"
+        });
+        let duplicate_request = HawkRequestBuilder::new(Method::Post, duplicate_url, &duplicate_key)
+            .body(duplicate_body)
+            .build()?;
+
+        let resp = Self::make_request(duplicate_request)?;
+        let duplicate_json: DuplicateToken = resp.json()?;
+
+        let url = config.auth_url_path("v1/oauth/token")?;
+        let dup_token = duplicate_json.sessionToken;
+        let dup_token_bytes = hex::decode(dup_token)?;
+        let key = derive_key_from_session_token(&dup_token_bytes)?;
+        let body = json!({
+            "client_id": config.client_id,
+            "scope": scopes.join(" "),
+            "grant_type": "fxa-credentials",
+            "access_type": "offline",
+        });
+        let request = HawkRequestBuilder::new(Method::Post, url, &key)
+            .body(body)
+            .build()?;
+        Ok(Self::make_request(request)?.json()?)
     }
 
     fn destroy_oauth_token(&self, config: &Config, token: &str) -> Result<()> {
@@ -194,6 +248,24 @@ impl FxAClient for Client {
 
         Self::make_request(request)?;
         Ok(())
+    }
+
+    fn scoped_key_data(
+        &self,
+        config: &Config,
+        session_token: &[u8],
+        scope: &str,
+    ) -> Result<HashMap<String, ScopedKeyDataResponse>> {
+        let body = json!({
+            "client_id": config.client_id,
+            "scope": scope,
+        });
+        let url = config.auth_url_path("v1/account/scoped-key-data")?;
+        let key = derive_key_from_session_token(session_token)?;
+        let request = HawkRequestBuilder::new(Method::Post, url, &key)
+            .body(body)
+            .build()?;
+        Self::make_request(request)?.json().map_err(|e| e.into())
     }
 }
 
@@ -414,6 +486,7 @@ pub struct OAuthTokenResponse {
     pub keys_jwe: Option<String>,
     pub refresh_token: Option<String>,
     pub expires_in: u64,
+    #[serde(default)] // TODO: workaround OAuth server bug.
     pub scope: String,
     pub access_token: String,
 }
@@ -432,4 +505,13 @@ pub struct ProfileResponse {
     pub amr_values: Vec<String>,
     #[serde(rename = "twoFactorAuthentication")]
     pub two_factor_authentication: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ScopedKeyDataResponse {
+    pub identifier: String,
+    #[serde(rename = "keyRotationSecret")]
+    pub key_rotation_secret: String,
+    #[serde(rename = "keyRotationTimestamp")]
+    pub key_rotation_timestamp: u64,
 }
