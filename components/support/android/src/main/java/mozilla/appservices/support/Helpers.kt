@@ -4,8 +4,11 @@
 
 package mozilla.appservices.support
 
-import com.google.protobuf.MessageLite
 import com.google.protobuf.CodedOutputStream
+import com.google.protobuf.MessageLite
+import com.sun.jna.Library
+import com.sun.jna.Native
+import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -24,3 +27,72 @@ fun <T : MessageLite> T.toNioDirectBuffer(): Pair<ByteBuffer, Int> {
     output.checkNoSpaceLeft()
     return Pair(first = nioBuf, second = len)
 }
+
+
+sealed class MegazordError(msg: String): Exception(msg)
+
+class IncompatibleMegazordVersion(
+    val libName: String,
+    val libVersion: String,
+    val mzVersion: String
+) : MegazordError("Incompatible megazord version: library \"$libName\" was compiled expecting " +
+                 "app-services version \"$libVersion\", but the megazord provides version \"$mzVersion\"")
+
+class MegazordNotInitialized(val libName: String) : MegazordError(
+    "The application-services megazord has not yet been initialized, but is needed by \"$libName\"")
+
+
+fun assertMegazordLibVersionsCompatible(libName: String, libVersion: String, mzVersion: String) {
+    // We require exact equality, since we don't perform a major version
+    // bump if we change the ABI. In practice, this seems unlikely to
+    // cause problems, but we could come up with a scheme if this proves annoying.
+    if (libVersion != mzVersion) {
+        throw IncompatibleMegazordVersion(libName, libVersion, mzVersion)
+    }
+}
+
+/**
+ * Determine the megazord library name, and check that it's version is
+ * compatible with the version of our bindings. Returns the megazord
+ * library name.
+ *
+ * Note: This is only public because it's called by an inline function.
+ * It should not be called by consumers.
+ */
+fun megazordCheck(libName: String, libVersion: String): String {
+    val mzLibrary = System.getProperty("mozilla.appservices.megazord.library")
+        ?: throw MegazordNotInitialized(libName)
+
+    // Assume it's properly initialized if it's been initialized at all
+    val mzVersion = System.getProperty("mozilla.appservices.megazord.version")!!
+
+    // We require exact equality, since we don't perform a major version
+    // bump if we change the ABI. In practice, this seems unlikely to
+    // cause problems, but we could come up with a scheme if this proves annoying.
+    if (libVersion != mzVersion) {
+        throw IncompatibleMegazordVersion(libName, libVersion, mzVersion)
+    }
+    return mzLibrary
+}
+
+/**
+ * Contains all the boilerplate for loading a
+ *
+ * Indirect as in, we aren't using JNA direct mapping. Eventually we'd
+ * like to (it's faster), but that's a problem for another day.
+ */
+inline fun <reified Lib: Library> loadIndirect(libName: String, libVersion: String): Lib {
+    val mzLibrary = megazordCheck(libName, libVersion)
+    return try {
+        Native.load<Lib>(mzLibrary, Lib::class.java)
+    } catch (e: UnsatisfiedLinkError) {
+        // This shouldn't actually be necessary if we set things up so that
+        // unit testing works, but until we verify that that happens, do this.
+        Proxy.newProxyInstance(
+            Lib::class.java.classLoader,
+            arrayOf(Lib::class.java)) { _, _, _ ->
+            throw RuntimeException("functionality not available (no native library)", e)
+        } as Lib
+    }
+}
+
