@@ -28,6 +28,8 @@ android {
     sourceSets {
         test.resources.srcDirs += "$buildDir/rustJniLibs/desktop"
         test.resources.srcDirs += "$buildDir/nativeLibs/desktop"
+        test.resources.srcDirs += "${project(':full-megazord').buildDir}/rustJniLibs/desktop"
+        test.resources.srcDirs += "${project(':full-megazord').buildDir}/nativeLibs/desktop"
     }
 
     // Uncomment to include debug symbols in native library builds.
@@ -94,9 +96,9 @@ dependencies {
 
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
 
-    api project(":full-megazord")
+    implementation project(":full-megazord")
 
-    jnaForTest project(path: ":full-megazord", configuration: 'jnaForTest')
+//    jnaForTest project(path: ":full-megazord", configuration: 'jnaForTest')
 
     // For reasons unknown, resolving the jnaForTest configuration directly
     // trips a nasty issue with the Android-Gradle plugin 3.2.1, like `Cannot
@@ -105,7 +107,7 @@ dependencies {
     // super-configuration of the testImplementation and then the `.files` is
     // causing it to be resolved.  Cloning first dissociates the configuration,
     // avoiding other configurations from being resolved.  Tricky!
-    testImplementation files(configurations.jnaForTest.copyRecursive().files)
+    testImplementation "net.java.dev.jna:jna:$jna_version@jar"//files(configurations.jnaForTest.copyRecursive().files)
     testImplementation 'junit:junit:4.12'
     testImplementation 'org.robolectric:robolectric:3.8'
     testImplementation 'org.mockito:mockito-core:2.21.0'
@@ -114,20 +116,21 @@ dependencies {
     androidTestImplementation 'com.android.support.test.espresso:espresso-core:3.0.2'
 }
 
-// afterEvaluate {
-//     // The `cargoBuild` task isn't available until after evaluation.
-//     android.libraryVariants.all { variant ->
-//         def productFlavor = ""
-//         variant.productFlavors.each {
-//             productFlavor += "${it.name.capitalize()}"
-//         }
-//         def buildType = "${variant.buildType.name.capitalize()}"
-//         tasks["generate${productFlavor}${buildType}Assets"].dependsOn(tasks["cargoBuild"])
+ afterEvaluate {
+     // The `cargoBuild` task isn't available until after evaluation.
+     android.libraryVariants.all { variant ->
+         def productFlavor = ""
+         variant.productFlavors.each {
+             productFlavor += "${it.name.capitalize()}"
+         }
+         def buildType = "${variant.buildType.name.capitalize()}"
+         tasks["generate${productFlavor}${buildType}Assets"].dependsOn(project(':full-megazord').tasks["cargoBuild"])
 
-//         // For unit tests.
-//         tasks["process${productFlavor}${buildType}UnitTestJavaRes"].dependsOn(tasks["cargoBuild"])
-//     }
-// }
+         // For unit tests.
+         tasks["process${productFlavor}${buildType}UnitTestJavaRes"].dependsOn(project(':full-megazord').tasks["cargoBuild"])
+         tasks["process${productFlavor}${buildType}UnitTestJavaRes"].dependsOn(project(':full-megazord').tasks["copyNativeLibs"])
+     }
+ }
 
 apply from: "$rootDir/publish.gradle"
 // If using jnaForTestConfiguration or variantWithoutLib,

@@ -109,8 +109,8 @@ afterEvaluate {
         // Don't depend on copyNativeLibs here as NSS libs are shipped with GeckoView.
 
         // For unit tests.
-        preBuild.dependsOn(tasks["cargoBuild"])
-        preBuild.dependsOn(tasks["copyNativeLibs"])
+//        preBuild.dependsOn(tasks["cargoBuild"])
+//        preBuild.dependsOn(tasks["copyNativeLibs"])
 //        tasks["process${productFlavor}${buildType}UnitTestJavaRes"].dependsOn(tasks["cargoBuild"])
 //        tasks["process${productFlavor}${buildType}UnitTestJavaRes"].dependsOn(tasks["copyNativeLibs"])
     }
